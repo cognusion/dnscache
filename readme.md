@@ -1,38 +1,176 @@
-### A DNS cache for Go
-CGO is used to lookup domain names. Given enough concurrent requests and the slightest hiccup in name resolution, it's quite easy to end up with blocked/leaking goroutines.
 
-The issue is documented at <https://code.google.com/p/go/issues/detail?id=5625>
 
-The Go team's singleflight solution (which isn't in stable yet) is rather elegant. However, it only eliminates concurrent lookups (thundering herd problems). Many systems can live with slightly stale resolve names, which means we can cacne DNS lookups and refresh them in the background.
+# dnscache
+`import "github.com/cognusion/dnscache"`
 
-### Installation
-Install using the "go get" command:
+* [Overview](#pkg-overview)
+* [Index](#pkg-index)
+* [Examples](#pkg-examples)
 
-    go get github.com/viki-org/dnscache
+## <a name="pkg-overview">Overview</a>
+Package dnscache caches DNS lookups.
+The package itself requires no non-standard modules, however
+a separate testing suite is used.
 
-### Usage
-The cache is thread safe. Create a new instance by specifying how long each entry should be cached (in seconds). Items will be refreshed in the background.
+Based on <a href="https://github.com/viki-org/dnscache">https://github.com/viki-org/dnscache</a> with modern Go
+facilities, no intrinsic goro leak, more flexibility, and more.
 
-    //refresh items every 5 minutes
-    resolver := dnscache.New(time.Minute * 5)
 
-    //get an array of net.IP
-    ips, _ := resolver.Fetch("api.viki.io")
+##### Example :
+``` go
+//refresh items every 5 minutes
+resolver := New(time.Minute * 5)
 
-    //get the first net.IP
-    ip, _ := resolver.FetchOne("api.viki.io")
+//get an array of net.IP
+ips, _ := resolver.Fetch("dns.google.com")
+fmt.Printf("%+v\n", ips)
 
-    //get the first net.IP as string
-    ip, _ := resolver.FetchOneString("api.viki.io")
+//get the first net.IP
+ip, _ := resolver.FetchOne("dns.google.com")
+fmt.Printf("%+v\n", ip)
 
-If you are using an `http.Transport`, you can use this cache by speficifying a
-`Dial` function:
+//get the first net.IP as string
+ipString, _ := resolver.FetchOneString("dns.google.com")
+fmt.Printf("%s\n", ipString)
+```
 
-    transport := &http.Transport {
-      MaxIdleConnsPerHost: 64,
-      Dial: func(network string, address string) (net.Conn, error) {
+
+
+## <a name="pkg-index">Index</a>
+* [Variables](#pkg-variables)
+* [type Resolver](#Resolver)
+  * [func New(refreshRate time.Duration) *Resolver](#New)
+  * [func (r *Resolver) Close() error](#Resolver.Close)
+  * [func (r *Resolver) Fetch(address string) ([]net.IP, error)](#Resolver.Fetch)
+  * [func (r *Resolver) FetchOne(address string) (net.IP, error)](#Resolver.FetchOne)
+  * [func (r *Resolver) FetchOneString(address string) (string, error)](#Resolver.FetchOneString)
+  * [func (r *Resolver) Lookup(address string) ([]net.IP, error)](#Resolver.Lookup)
+  * [func (r *Resolver) Refresh()](#Resolver.Refresh)
+
+#### <a name="pkg-examples">Examples</a>
+* [Package](#example-)
+* [Resolver](#example-resolver)
+
+#### <a name="pkg-files">Package files</a>
+[dnscache.go](https://github.com/cognusion/dnscache/tree/master/dnscache.go)
+
+
+
+## <a name="pkg-variables">Variables</a>
+``` go
+var RefreshSleepTime = 1 * time.Second
+```
+RefreshSleepTime is the delay between Refresh (and auto-refresh)
+lookups, to keep the resolver threads from piling up.
+
+
+
+
+## <a name="Resolver">type</a> [Resolver](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=550:642#L21)
+``` go
+type Resolver struct {
+    // contains filtered or unexported fields
+}
+
+```
+Resolver is a goro-safe caching DNS resolver.
+
+
+
+##### Example Resolver:
+If you are using an `http.Transport`, you can use this cache by speficifying a `Dial` function.
+
+``` go
+// Create a resolver somewhere
+resolver := New(5 * time.Minute)
+
+transport := &http.Transport{
+    MaxIdleConnsPerHost: 64,
+    Dial: func(network string, address string) (net.Conn, error) {
         separator := strings.LastIndex(address, ":")
-        ip, _ := dnscache.FetchString(address[:separator])
-        return net.Dial("tcp", ip + address[separator:])
-      },
-    }
+        ip, _ := resolver.FetchOneString(address[:separator])
+        return net.Dial("tcp", ip+address[separator:])
+    },
+}
+
+// e.g.
+http.DefaultTransport = transport
+```
+
+
+
+
+
+### <a name="New">func</a> [New](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=791:836#L30)
+``` go
+func New(refreshRate time.Duration) *Resolver
+```
+New returns a properly instantiated Resolver.
+If the refreshRate is non-zero, a goro will refresh
+all of the entries after that Duration.
+
+
+
+
+
+### <a name="Resolver.Close">func</a> (\*Resolver) [Close](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=1173:1205#L43)
+``` go
+func (r *Resolver) Close() error
+```
+Close signals the auto-refresh goro, if any, to quit.
+This is safe to call once, in any thread, regardless of whether or not auto-refresh is used.
+
+
+
+
+### <a name="Resolver.Fetch">func</a> (\*Resolver) [Fetch](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=1312:1370#L49)
+``` go
+func (r *Resolver) Fetch(address string) ([]net.IP, error)
+```
+Fetch returns a collection of IPs from cache, or a live lookup if not.
+
+
+
+
+### <a name="Resolver.FetchOne">func</a> (\*Resolver) [FetchOne](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=1573:1632#L61)
+``` go
+func (r *Resolver) FetchOne(address string) (net.IP, error)
+```
+FetchOne returns a single IP from cache, or a live lookup if not.
+
+
+
+
+### <a name="Resolver.FetchOneString">func</a> (\*Resolver) [FetchOneString](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=1832:1897#L70)
+``` go
+func (r *Resolver) FetchOneString(address string) (string, error)
+```
+FetchOneString returns a single IP -as a string- from cache, or a live lookup if not.
+
+
+
+
+### <a name="Resolver.Lookup">func</a> (\*Resolver) [Lookup](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=2380:2439#L91)
+``` go
+func (r *Resolver) Lookup(address string) ([]net.IP, error)
+```
+Lookup returns a collection of IPs from a live lookup, and updates the cache.
+
+
+
+
+### <a name="Resolver.Refresh">func</a> (\*Resolver) [Refresh](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=2109:2137#L79)
+``` go
+func (r *Resolver) Refresh()
+```
+Refresh will iterate over cache items, and performing a live lookup one every RefreshSleepTime.
+
+
+
+
+
+
+
+
+- - -
+Generated by [godoc2md](http://github.com/cognusion/godoc2md)

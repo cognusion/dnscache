@@ -1,79 +1,169 @@
 package dnscache
 
 import (
-  "net"
-  "sort"
-  "time"
-  "testing"
+	"fmt"
+	"net"
+	"net/http"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/fortytw2/leaktest"
+	. "github.com/smartystreets/goconvey/convey"
 )
 
+var googs = []string{"8.8.4.4", "8.8.8.8"}
+
+func Example() {
+	//refresh items every 5 minutes
+	resolver := New(time.Minute * 5)
+
+	//get an array of net.IP
+	ips, _ := resolver.Fetch("dns.google.com")
+	fmt.Printf("%+v\n", ips)
+
+	//get the first net.IP
+	ip, _ := resolver.FetchOne("dns.google.com")
+	fmt.Printf("%+v\n", ip)
+
+	//get the first net.IP as string
+	ipString, _ := resolver.FetchOneString("dns.google.com")
+	fmt.Printf("%s\n", ipString)
+}
+
+// If you are using an `http.Transport`, you can use this cache by speficifying a `Dial` function.
+func ExampleResolver() {
+	// Create a resolver somewhere
+	resolver := New(5 * time.Minute)
+
+	transport := &http.Transport{
+		MaxIdleConnsPerHost: 64,
+		Dial: func(network string, address string) (net.Conn, error) {
+			separator := strings.LastIndex(address, ":")
+			ip, _ := resolver.FetchOneString(address[:separator])
+			return net.Dial("tcp", ip+address[separator:])
+		},
+	}
+
+	// e.g.
+	http.DefaultTransport = transport
+}
+
 func TestFetchReturnsAndErrorOnInvalidLookup(t *testing.T) {
-  ips, err := New(0).Lookup("invalid.viki.io")
-  if ips != nil {
-    t.Errorf("Expecting nil ips, got %v", ips)
-  }
-  expected := "lookup invalid.viki.io: no such host"
-  if err.Error() != expected {
-    t.Errorf("Expecting %q error, got %q", expected, err.Error())
-  }
+	defer leaktest.Check(t)()
+
+	Convey("When an invalid lookup occurs, the expected results happen", t, func() {
+		ips, err := New(0).Lookup("invalid.viki.io")
+		So(ips, ShouldBeZeroValue)
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldEqual, "lookup invalid.viki.io: no such host")
+	})
 }
 
 func TestFetchReturnsAListOfIps(t *testing.T) {
-  ips, _ := New(0).Lookup("dnscache.go.test.viki.io")
-  assertIps(t, ips, []string{"1.123.58.13", "31.85.32.110"})
+	defer leaktest.Check(t)()
+
+	Convey("When a known lookup occurs, the expected results happen", t, func() {
+		ips, _ := New(0).Lookup("dns.google.com")
+		So(ipsTov4(ips...), ShouldResemble, googs)
+	})
 }
 
 func TestCallingLookupAddsTheItemToTheCache(t *testing.T) {
-  r := New(0)
-  r.Lookup("dnscache.go.test.viki.io")
-  assertIps(t, r.cache["dnscache.go.test.viki.io"], []string{"1.123.58.13", "31.85.32.110"})
+	defer leaktest.Check(t)()
+
+	Convey("When a known lookup occurs, the expected results are in the raw cache", t, func() {
+		r := New(0)
+		r.Lookup("dns.google.com")
+		r.lock.RLock()
+		defer r.lock.RUnlock()
+		So(ipsTov4(r.cache["dns.google.com"]...), ShouldResemble, googs)
+	})
 }
 
 func TestFetchLoadsValueFromTheCache(t *testing.T) {
-  r := New(0)
-  r.cache["invalid.viki.io"] = []net.IP{net.ParseIP("1.1.2.3")}
-  ips, _ := r.Fetch("invalid.viki.io")
-  assertIps(t, ips, []string{"1.1.2.3"})
+	defer leaktest.Check(t)()
+
+	Convey("When a DNSCache entry is hand-crafted, and Fetch is called on it, the result is expected.", t, func() {
+		r := New(0)
+		r.cache["invalid.viki.io"] = stringsToIPs("1.1.2.3")
+		ips, _ := r.Fetch("invalid.viki.io")
+		So(ips, ShouldResemble, stringsToIPs("1.1.2.3"))
+	})
 }
 
 func TestFetchOneLoadsTheFirstValue(t *testing.T) {
-  r := New(0)
-  r.cache["something.viki.io"] = []net.IP{net.ParseIP("1.1.2.3"), net.ParseIP("100.100.102.103")}
-  ip, _ := r.FetchOne("something.viki.io")
-  assertIps(t, []net.IP{ip}, []string{"1.1.2.3"})
+	defer leaktest.Check(t)()
+
+	Convey("When a DNSCache entry is hand-crafted, and FetchOne is called on it, the result is expected.", t, func() {
+		r := New(0)
+		r.cache["something.viki.io"] = stringsToIPs("1.1.2.3", "100.100.102.103")
+		ip, _ := r.FetchOne("something.viki.io")
+		So([]net.IP{ip}, ShouldResemble, stringsToIPs("1.1.2.3"))
+	})
 }
 
 func TestFetchOneStringLoadsTheFirstValue(t *testing.T) {
-  r := New(0)
-  r.cache["something.viki.io"] = []net.IP{net.ParseIP("100.100.102.103"), net.ParseIP("100.100.102.104")}
-  ip, _ := r.FetchOneString("something.viki.io")
-  if ip != "100.100.102.103" {
-    t.Errorf("expected 100.100.102.103 but got %v", ip)
-  }
+	defer leaktest.Check(t)()
+
+	Convey("When a DNSCache entry is hand-crafted, and FetchOneString is called on it, the result is expected.", t, func() {
+		r := New(0)
+		r.cache["something.viki.io"] = stringsToIPs("100.100.102.103", "100.100.102.104")
+		ip, _ := r.FetchOneString("something.viki.io")
+		So(ip, ShouldEqual, "100.100.102.103")
+	})
 }
 
 func TestFetchLoadsTheIpAndCachesIt(t *testing.T) {
-  r := New(0)
-  ips, _ := r.Fetch("dnscache.go.test.viki.io")
-  assertIps(t, ips, []string{"1.123.58.13", "31.85.32.110"})
-  assertIps(t, r.cache["dnscache.go.test.viki.io"], []string{"1.123.58.13", "31.85.32.110"})
+	defer leaktest.Check(t)()
+
+	Convey("When a DNS entry is fetched, it is correct", t, func() {
+		r := New(0)
+		ips, _ := r.Fetch("dns.google.com")
+		So(ipsTov4(ips...), ShouldResemble, googs)
+		Convey("And so is the cache", func() {
+			r.lock.RLock()
+			defer r.lock.RUnlock()
+			So(ipsTov4(r.cache["dns.google.com"]...), ShouldResemble, googs)
+		})
+	})
 }
 
 func TestItReloadsTheIpsAtAGivenInterval(t *testing.T) {
-  r := New(1)
-  r.cache["dnscache.go.test.viki.io"] = nil
-  time.Sleep(time.Second * 2)
-  assertIps(t, r.cache["dnscache.go.test.viki.io"], []string{"1.123.58.13", "31.85.32.110"})
+	defer leaktest.Check(t)()
+
+	Convey("When a DNSCache is created with an autorefresh interval, and an entry is corrupted, it properly refreshes.", t, func() {
+		RefreshSleepTime = 0 // Set this to immediate
+		r := New(10 * time.Millisecond)
+		defer r.Close() // if we're using autorefresh, Close prevents a goroleak.
+
+		r.lock.Lock()
+		r.cache["dns.google.com"] = nil
+		r.lock.Unlock()
+		time.Sleep(100 * time.Millisecond)
+		r.lock.RLock()
+		defer r.lock.RUnlock()
+		So(ipsTov4(r.cache["dns.google.com"]...), ShouldResemble, googs)
+	})
 }
 
-func assertIps(t *testing.T, actuals []net.IP, expected []string) {
-  if len(actuals) != len(expected) {
-    t.Errorf("Expecting %d ips, got %d", len(expected), len(actuals))
-  }
-  sort.Strings(expected)
-  for _, ip := range actuals {
-    if sort.SearchStrings(expected, ip.String()) == -1 {
-      t.Errorf("Got an unexpected ip: %v:", actuals[0])
-    }
-  }
+func stringsToIPs(strs ...string) []net.IP {
+	ips := make([]net.IP, len(strs))
+	for i, s := range strs {
+		ips[i] = net.ParseIP(s).To4()
+	}
+	return ips
+}
+
+func ipsTov4(ips ...net.IP) []string {
+	ip4s := make([]string, 0)
+	for _, i := range ips {
+		i4 := i.To4()
+		if i4 != nil {
+			ip4s = append(ip4s, i4.String())
+		}
+	}
+	slices.Sort(ip4s)
+	return ip4s
 }
