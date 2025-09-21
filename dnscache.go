@@ -118,9 +118,9 @@ func (r *Resolver) RefreshTimeout(timeout time.Duration) {
 		ok      bool
 	)
 
-	// Create the iterator funcs we'll
+	// Create the iterator funcs we'll use
 	next, stop := iter.Pull(addresses)
-	defer stop() // close the iterator
+	defer stop() // close the iterator eventually
 
 	// do the first lookup out-of-loop
 	address, ok = next()
@@ -146,7 +146,7 @@ func (r *Resolver) RefreshTimeout(timeout time.Duration) {
 			// actively cancelled
 			return
 		case <-ctx.Done():
-			// took too long
+			// took too long, deadline exceeded.
 			return
 		}
 	}
