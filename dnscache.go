@@ -7,6 +7,8 @@
 package dnscache
 
 import (
+	"context"
+	"iter"
 	"maps"
 	"net"
 	"sync"
@@ -28,12 +30,21 @@ type Resolver struct {
 // If the refreshRate is non-zero, a goro will refresh
 // all of the entries after that Duration.
 func New(refreshRate time.Duration) *Resolver {
+	return NewWithRefreshTimeout(refreshRate, 0)
+}
+
+// NewWithRefreshTimeout returns a properly instantiated Resolver.
+// If the refreshRate is non-zero, a goro will refresh
+// all of the entries after that Duration.
+// If refreshTimeout is non-zero, each auto-refresh iteraction will timeout after
+// the specified duration (expressed as a deadline).
+func NewWithRefreshTimeout(refreshRate, refreshTimeout time.Duration) *Resolver {
 	resolver := &Resolver{
 		cache: make(map[string][]net.IP, 64),
 		done:  make(chan struct{}),
 	}
 	if refreshRate > 0 {
-		go resolver.autoRefresh(refreshRate)
+		go resolver.autoRefreshTimeout(refreshRate, refreshTimeout)
 	}
 	return resolver
 }
@@ -77,13 +88,67 @@ func (r *Resolver) FetchOneString(address string) (string, error) {
 
 // Refresh will iterate over cache items, and performing a live lookup one every RefreshSleepTime.
 func (r *Resolver) Refresh() {
+	r.RefreshTimeout(0)
+}
+
+// RefreshTimeout will iterate over cache items, and performing a live lookup one every RefreshSleepTime,
+// until completed or the stated timeout expires.
+func (r *Resolver) RefreshTimeout(timeout time.Duration) {
+
 	r.lock.RLock()
 	addresses := maps.Keys(r.cache)
 	r.lock.RUnlock()
 
-	for address := range addresses {
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+
+	if timeout == 0 {
+		// No deadline
+		ctx, cancel = context.WithCancel(context.Background())
+	} else {
+		// Deadline
+		ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(timeout))
+	}
+	defer cancel() // because yes
+
+	var (
+		address string
+		ok      bool
+	)
+
+	// Create the iterator funcs we'll
+	next, stop := iter.Pull(addresses)
+	defer stop() // close the iterator
+
+	// do the first lookup out-of-loop
+	address, ok = next()
+	if ok {
 		r.Lookup(address)
-		time.Sleep(RefreshSleepTime)
+	} else {
+		// nothing to do here
+		return
+	}
+
+	for {
+		select {
+		case <-time.After(RefreshSleepTime):
+			// lookup the next address
+			address, ok = next()
+			if ok {
+				r.Lookup(address)
+			} else {
+				// nothing to do here
+				return
+			}
+		case <-r.done:
+			// actively cancelled
+			return
+		case <-ctx.Done():
+			// took too long
+			return
+		}
 	}
 }
 
@@ -102,11 +167,13 @@ func (r *Resolver) Lookup(address string) ([]net.IP, error) {
 
 // autoRefresh is an internal loop to Refresh every declared interval.
 // The loop terminates if Close is called.
-func (r *Resolver) autoRefresh(rate time.Duration) {
+// The specified timeout is passed on to each Refresh iteration, or 0 for
+// no timeout.
+func (r *Resolver) autoRefreshTimeout(rate, timeout time.Duration) {
 	for {
 		select {
 		case <-time.After(rate):
-			r.Refresh()
+			r.RefreshTimeout(timeout)
 		case <-r.done:
 			return
 		}
