@@ -15,25 +15,48 @@ import (
 
 var googs = []string{"8.8.4.4", "8.8.8.8"}
 
-func Example() {
+func ExampleNew() {
 	//refresh items every 5 minutes
 	resolver := New(time.Minute * 5)
-
 	//get an array of net.IP
 	ips, _ := resolver.Fetch("dns.google.com")
 	fmt.Printf("%+v\n", ips)
+}
 
+func ExampleNewWithRefreshTimeout() {
+	//refresh items every 5 minutes, timeout each refresh after 1 minute.
+	resolver := NewWithRefreshTimeout(time.Minute*5, time.Minute*1)
+	//get an array of net.IP
+	ips, _ := resolver.Fetch("dns.google.com")
+	fmt.Printf("%+v\n", ips)
+}
+
+func ExampleResolver_Fetch() {
+	//refresh items every 5 minutes
+	resolver := New(time.Minute * 5)
+	//get an array of net.IP
+	ips, _ := resolver.Fetch("dns.google.com")
+	fmt.Printf("%+v\n", ips)
+}
+
+func ExampleResolver_FetchOne() {
+	//refresh items every 5 minutes
+	resolver := New(time.Minute * 5)
 	//get the first net.IP
 	ip, _ := resolver.FetchOne("dns.google.com")
 	fmt.Printf("%+v\n", ip)
+}
 
+func ExampleResolver_FetchOneString() {
+	//refresh items every 5 minutes
+	resolver := New(time.Minute * 5)
 	//get the first net.IP as string
 	ipString, _ := resolver.FetchOneString("dns.google.com")
 	fmt.Printf("%s\n", ipString)
 }
 
-// If you are using an `http.Transport`, you can use this cache by speficifying a `Dial` function.
-func ExampleResolver() {
+// If you are using an `http.Transport`, you can use this cache by specifying a `Dial` function.
+func Example() {
 	// Create a resolver somewhere
 	resolver := New(5 * time.Minute)
 
