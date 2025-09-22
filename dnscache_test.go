@@ -174,9 +174,11 @@ func TestItReloadsTheIpsAtAGivenInterval(t *testing.T) {
 func TestAGTimeout(t *testing.T) {
 	defer leaktest.Check(t)()
 
+	// Some times these lose a race if testing with -race. I don't think they warrant a GL or atomic vars.
+	RefreshSleepTime = 4 * time.Second // Set this to an unreasonably large number
+	RefreshShuffle = false             // Turn off else unpredictable.
+
 	Convey("When a DNSCache is created with an autorefresh interval, and an entry is corrupted, it properly refreshes.", t, FailureContinues, func() {
-		RefreshSleepTime = 4 * time.Second                                  // Set this to an unreasonably large number
-		RefreshShuffle = false                                              // Turn off else unpredictable.
 		r := NewWithRefreshTimeout(20*time.Millisecond, 1*time.Millisecond) // Set the timeout unreasonably small
 		defer r.Close()                                                     // if we're using autorefresh, Close prevents a goroleak.
 
@@ -197,7 +199,7 @@ func TestAGTimeout(t *testing.T) {
 func TestEmptyCacheRefresh(t *testing.T) {
 	defer leaktest.Check(t)()
 
-	Convey("", t, FailureContinues, func() {
+	Convey("When a DNSCache is created, and forcibly refreshed despite being empty, nothing explodes, and the Refresh occurs quickly.", t, func() {
 		r := New(0) // no autorefresh
 		start := time.Now()
 		r.Refresh()
