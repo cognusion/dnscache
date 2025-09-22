@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cognusion/dnscache/cache"
 	"github.com/fortytw2/leaktest"
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -97,11 +98,23 @@ func TestCallingLookupAddsTheItemToTheCache(t *testing.T) {
 	defer leaktest.Check(t)()
 
 	Convey("When a known lookup occurs, the expected results are in the raw cache", t, func() {
-		r := New(0)
+		c, err := cache.NewSimple()
+		So(err, ShouldBeNil)
+
+		r := NewFromConfig(&ResolverConfig{
+			Cache: c,
+		})
 		r.Lookup("dns.google.com")
-		r.lock.RLock()
-		defer r.lock.RUnlock()
-		So(ipsTov4(r.cache["dns.google.com"]...), ShouldResemble, googs)
+
+		ips, ok := c.Get("dns.google.com")
+		So(ok, ShouldBeTrue)
+		So(ipsTov4(ips...), ShouldResemble, googs)
+
+		Convey("When the cache is purged, it is empty", func() {
+			SoMsg("Expected 1 item is not in cache", c.Len(), ShouldEqual, 1)
+			r.Purge()
+			So(c.Len(), ShouldEqual, 0)
+		})
 	})
 }
 
@@ -109,8 +122,13 @@ func TestFetchLoadsValueFromTheCache(t *testing.T) {
 	defer leaktest.Check(t)()
 
 	Convey("When a DNSCache entry is hand-crafted, and Fetch is called on it, the result is expected.", t, func() {
-		r := New(0)
-		r.cache["invalid.viki.io"] = stringsToIPs("1.1.2.3")
+		c, err := cache.NewSimple()
+		So(err, ShouldBeNil)
+
+		r := NewFromConfig(&ResolverConfig{
+			Cache: c,
+		})
+		c.Add("invalid.viki.io", stringsToIPs("1.1.2.3"))
 		ips, _ := r.Fetch("invalid.viki.io")
 		So(ips, ShouldResemble, stringsToIPs("1.1.2.3"))
 	})
@@ -120,8 +138,13 @@ func TestFetchOneLoadsTheFirstValue(t *testing.T) {
 	defer leaktest.Check(t)()
 
 	Convey("When a DNSCache entry is hand-crafted, and FetchOne is called on it, the result is expected.", t, func() {
-		r := New(0)
-		r.cache["something.viki.io"] = stringsToIPs("1.1.2.3", "100.100.102.103")
+		c, err := cache.NewSimple()
+		So(err, ShouldBeNil)
+
+		r := NewFromConfig(&ResolverConfig{
+			Cache: c,
+		})
+		c.Add("something.viki.io", stringsToIPs("1.1.2.3", "100.100.102.103"))
 		ip, _ := r.FetchOne("something.viki.io")
 		So([]net.IP{ip}, ShouldResemble, stringsToIPs("1.1.2.3"))
 	})
@@ -131,8 +154,13 @@ func TestFetchOneStringLoadsTheFirstValue(t *testing.T) {
 	defer leaktest.Check(t)()
 
 	Convey("When a DNSCache entry is hand-crafted, and FetchOneString is called on it, the result is expected.", t, func() {
-		r := New(0)
-		r.cache["something.viki.io"] = stringsToIPs("100.100.102.103", "100.100.102.104")
+		c, err := cache.NewSimple()
+		So(err, ShouldBeNil)
+
+		r := NewFromConfig(&ResolverConfig{
+			Cache: c,
+		})
+		c.Add("something.viki.io", stringsToIPs("100.100.102.103", "100.100.102.104"))
 		ip, _ := r.FetchOneString("something.viki.io")
 		So(ip, ShouldEqual, "100.100.102.103")
 	})
@@ -142,13 +170,18 @@ func TestFetchLoadsTheIpAndCachesIt(t *testing.T) {
 	defer leaktest.Check(t)()
 
 	Convey("When a DNS entry is fetched, it is correct", t, func() {
-		r := New(0)
+		c, err := cache.NewSimple()
+		So(err, ShouldBeNil)
+
+		r := NewFromConfig(&ResolverConfig{
+			Cache: c,
+		})
 		ips, _ := r.Fetch("dns.google.com")
 		So(ipsTov4(ips...), ShouldResemble, googs)
 		Convey("And so is the cache", func() {
-			r.lock.RLock()
-			defer r.lock.RUnlock()
-			So(ipsTov4(r.cache["dns.google.com"]...), ShouldResemble, googs)
+			ips, ok := c.Get("dns.google.com")
+			So(ok, ShouldBeTrue)
+			So(ipsTov4(ips...), ShouldResemble, googs)
 		})
 	})
 }
@@ -157,42 +190,97 @@ func TestItReloadsTheIpsAtAGivenInterval(t *testing.T) {
 	defer leaktest.Check(t)()
 
 	Convey("When a DNSCache is created with an autorefresh interval, and an entry is corrupted, it properly refreshes.", t, func() {
-		RefreshSleepTime = 0 // Set this to immediate
-		r := New(10 * time.Millisecond)
+		c, err := cache.NewSimple(
+			cache.NewConfigOption(cache.ConfigRefreshSleepTime, time.Duration(0)), // immediate
+			cache.NewConfigOption(cache.ConfigRefreshShuffle, false),              // else unpredictable
+		)
+		So(err, ShouldBeNil)
+
+		r := NewFromConfig(&ResolverConfig{
+			Cache:               c,
+			AutoRefreshInterval: 10 * time.Millisecond,
+		})
 		defer r.Close() // if we're using autorefresh, Close prevents a goroleak.
 
-		r.lock.Lock()
-		r.cache["dns.google.com"] = nil
-		r.lock.Unlock()
+		c.Add("dns.google.com", []net.IP{})
 		time.Sleep(100 * time.Millisecond)
-		r.lock.RLock()
-		defer r.lock.RUnlock()
-		So(ipsTov4(r.cache["dns.google.com"]...), ShouldResemble, googs)
+
+		ips, ok := c.Get("dns.google.com")
+		So(ok, ShouldBeTrue)
+		So(ipsTov4(ips...), ShouldResemble, googs)
+	})
+
+	Convey("When an LRU DNSCache is created with an autorefresh interval, and an entry is corrupted, it properly refreshes.", t, func() {
+		c, err := cache.NewLRU(
+			cache.NewConfigOption(cache.ConfigRefreshSleepTime, time.Duration(0)), // immediate
+			cache.NewConfigOption(cache.ConfigRefreshShuffle, false),              // else unpredictable
+			cache.NewConfigOption(cache.ConfigSize, 5),
+		)
+		So(err, ShouldBeNil)
+
+		r := NewFromConfig(&ResolverConfig{
+			Cache:               c,
+			AutoRefreshInterval: 10 * time.Millisecond,
+		})
+		defer r.Close() // if we're using autorefresh, Close prevents a goroleak.
+
+		c.Add("dns.google.com", []net.IP{})
+		c.Add("images.google.com", []net.IP{})
+		time.Sleep(100 * time.Millisecond)
+		ips, ok := c.Get("dns.google.com")
+		So(ok, ShouldBeTrue)
+		So(ipsTov4(ips...), ShouldResemble, googs)
+		ips, ok = c.Get("images.google.com")
+		So(ok, ShouldBeTrue)
+		So(ips, ShouldNotBeZeroValue)
+
+		fips, ferr := r.Fetch("dns.google.com")
+		So(ferr, ShouldBeNil)
+		So(ipsTov4(fips...), ShouldResemble, googs)
 	})
 }
 
 func TestAGTimeout(t *testing.T) {
 	defer leaktest.Check(t)()
 
-	// Some times these lose a race if testing with -race. I don't think they warrant a GL or atomic vars.
-	RefreshSleepTime = 4 * time.Second // Set this to an unreasonably large number
-	RefreshShuffle = false             // Turn off else unpredictable.
-
 	Convey("When a DNSCache is created with an autorefresh interval, and an entry is corrupted, it properly refreshes.", t, FailureContinues, func() {
-		r := NewWithRefreshTimeout(20*time.Millisecond, 1*time.Millisecond) // Set the timeout unreasonably small
-		defer r.Close()                                                     // if we're using autorefresh, Close prevents a goroleak.
+		c, err := cache.NewSimple(
+			cache.NewConfigOption(cache.ConfigRefreshSleepTime, 4*time.Second), // loooooong time
+			cache.NewConfigOption(cache.ConfigRefreshShuffle, false),           // else unpredictable
+		)
+		So(err, ShouldBeNil)
 
-		r.lock.Lock()
-		r.cache["dns.google.com"] = nil
-		r.cache["www.google.com"] = nil
-		r.cache["images.google.com"] = nil
-		r.lock.Unlock()
+		r := NewFromConfig(&ResolverConfig{
+			Cache:               c,
+			AutoRefreshInterval: 20 * time.Millisecond,
+			AutoRefreshTimeout:  1 * time.Millisecond,
+		})
+		defer r.Close() // if we're using autorefresh, Close prevents a goroleak.
+
+		c.Add("dns.google.com", []net.IP{})
+		c.Add("www.google.com", []net.IP{})
+		c.Add("images.google.com", []net.IP{})
+
 		time.Sleep(100 * time.Millisecond) // 3-5 refresh runs
-		r.lock.RLock()
-		defer r.lock.RUnlock()
-		So(ipsTov4(r.cache["dns.google.com"]...), ShouldResemble, googs) // first always gets a lookup
-		So(r.cache["www.google.com"], ShouldBeZeroValue)                 // will always miss the timeout
-		So(r.cache["images.google.com"], ShouldBeZeroValue)              // will always miss the timeout
+
+		ips, ok := c.Get("dns.google.com")
+		So(ok, ShouldBeTrue)
+		So(ipsTov4(ips...), ShouldResemble, googs) // first always gets a lookup
+		ips, ok = c.Get("www.google.com")
+		So(ok, ShouldBeTrue)
+		So(ips, ShouldBeEmpty) // should always miss
+		ips, ok = c.Get("images.google.com")
+		So(ok, ShouldBeTrue)
+		So(ips, ShouldBeEmpty) // should always miss
+	})
+}
+
+func TestResolverCaches(t *testing.T) {
+	Convey("The provided caches implement ResolverCache", t, func() {
+		r := &cache.Simple{}
+		SoMsg("cache.Simple is no longer a ResolverCache!", r, ShouldImplement, (*ResolverCache)(nil))
+		l := &cache.LRU{}
+		SoMsg("cache,LRU is no longer a ResolverCache!", l, ShouldImplement, (*ResolverCache)(nil))
 	})
 }
 

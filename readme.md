@@ -6,6 +6,7 @@
 * [Overview](#pkg-overview)
 * [Index](#pkg-index)
 * [Examples](#pkg-examples)
+* [Subdirectories](#pkg-subdirectories)
 
 ## <a name="pkg-overview">Overview</a>
 Package dnscache caches DNS lookups.
@@ -42,14 +43,18 @@ http.DefaultTransport = transport
 * [Variables](#pkg-variables)
 * [type Resolver](#Resolver)
   * [func New(refreshRate time.Duration) *Resolver](#New)
+  * [func NewFromConfig(config *ResolverConfig) *Resolver](#NewFromConfig)
   * [func NewWithRefreshTimeout(refreshRate, refreshTimeout time.Duration) *Resolver](#NewWithRefreshTimeout)
   * [func (r *Resolver) Close() error](#Resolver.Close)
   * [func (r *Resolver) Fetch(address string) ([]net.IP, error)](#Resolver.Fetch)
   * [func (r *Resolver) FetchOne(address string) (net.IP, error)](#Resolver.FetchOne)
   * [func (r *Resolver) FetchOneString(address string) (string, error)](#Resolver.FetchOneString)
   * [func (r *Resolver) Lookup(address string) ([]net.IP, error)](#Resolver.Lookup)
+  * [func (r *Resolver) Purge()](#Resolver.Purge)
   * [func (r *Resolver) Refresh()](#Resolver.Refresh)
   * [func (r *Resolver) RefreshTimeout(timeout time.Duration)](#Resolver.RefreshTimeout)
+* [type ResolverCache](#ResolverCache)
+* [type ResolverConfig](#ResolverConfig)
 
 #### <a name="pkg-examples">Examples</a>
 * [Package](#example-)
@@ -60,7 +65,7 @@ http.DefaultTransport = transport
 * [Resolver.FetchOneString](#example-resolver_fetchonestring)
 
 #### <a name="pkg-files">Package files</a>
-[dnscache.go](https://github.com/cognusion/dnscache/tree/master/dnscache.go)
+[cache.go](https://github.com/cognusion/dnscache/tree/master/cache.go) [dnscache.go](https://github.com/cognusion/dnscache/tree/master/dnscache.go)
 
 
 
@@ -69,17 +74,19 @@ http.DefaultTransport = transport
 var (
     // RefreshSleepTime is the delay between Refresh (and auto-refresh)
     // lookups, to keep the resolver threads from piling up.
+    // Changes after a Resolver is instantiated are ignored.
     RefreshSleepTime = 1 * time.Second
 
     // RefreshShuffle is used to control whether the addresses are shuffled during Refresh,
     // to avoid long-tail misses on sufficiently large caches.
+    // Changes after a Resolver is instantiated are ignored.
     RefreshShuffle = true
 )
 ```
 
 
 
-## <a name="Resolver">type</a> [Resolver](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=767:859#L30)
+## <a name="Resolver">type</a> [Resolver](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=877:969#L30)
 ``` go
 type Resolver struct {
     // contains filtered or unexported fields
@@ -94,7 +101,7 @@ Resolver is a goro-safe caching DNS resolver.
 
 
 
-### <a name="New">func</a> [New](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=1008:1053#L39)
+### <a name="New">func</a> [New](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=1118:1163#L39)
 ``` go
 func New(refreshRate time.Duration) *Resolver
 ```
@@ -112,7 +119,17 @@ ips, _ := resolver.Fetch("dns.google.com")
 fmt.Printf("%+v\n", ips)
 ```
 
-### <a name="NewWithRefreshTimeout">func</a> [NewWithRefreshTimeout](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=1405:1484#L48)
+### <a name="NewFromConfig">func</a> [NewFromConfig](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=2305:2357#L69)
+``` go
+func NewFromConfig(config *ResolverConfig) *Resolver
+```
+NewFromConfig returns a properly instantiated resolver, using the provided Cache
+and the provided AutoRefresh* values.
+NOTE: If using an LRU-style cache, setting the AutoRefreshInterval has large as
+feasible is advised, to keep the cache calculus correct.
+
+
+### <a name="NewWithRefreshTimeout">func</a> [NewWithRefreshTimeout](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=1515:1594#L48)
 ``` go
 func NewWithRefreshTimeout(refreshRate, refreshTimeout time.Duration) *Resolver
 ```
@@ -135,7 +152,7 @@ fmt.Printf("%+v\n", ips)
 
 
 
-### <a name="Resolver.Close">func</a> (\*Resolver) [Close](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=1844:1876#L61)
+### <a name="Resolver.Close">func</a> (\*Resolver) [Close](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=2763:2795#L85)
 ``` go
 func (r *Resolver) Close() error
 ```
@@ -145,7 +162,7 @@ This is safe to call once, in any thread, regardless of whether or not auto-refr
 
 
 
-### <a name="Resolver.Fetch">func</a> (\*Resolver) [Fetch](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=1983:2041#L67)
+### <a name="Resolver.Fetch">func</a> (\*Resolver) [Fetch](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=2914:2972#L91)
 ``` go
 func (r *Resolver) Fetch(address string) ([]net.IP, error)
 ```
@@ -163,7 +180,7 @@ fmt.Printf("%+v\n", ips)
 
 
 
-### <a name="Resolver.FetchOne">func</a> (\*Resolver) [FetchOne](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=2244:2303#L79)
+### <a name="Resolver.FetchOne">func</a> (\*Resolver) [FetchOne](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=3078:3137#L96)
 ``` go
 func (r *Resolver) FetchOne(address string) (net.IP, error)
 ```
@@ -181,7 +198,7 @@ fmt.Printf("%+v\n", ip)
 
 
 
-### <a name="Resolver.FetchOneString">func</a> (\*Resolver) [FetchOneString](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=2503:2568#L88)
+### <a name="Resolver.FetchOneString">func</a> (\*Resolver) [FetchOneString](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=3337:3402#L105)
 ``` go
 func (r *Resolver) FetchOneString(address string) (string, error)
 ```
@@ -199,7 +216,7 @@ fmt.Printf("%s\n", ipString)
 
 
 
-### <a name="Resolver.Lookup">func</a> (\*Resolver) [Lookup](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=4218:4277#L157)
+### <a name="Resolver.Lookup">func</a> (\*Resolver) [Lookup](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=4048:4107#L126)
 ``` go
 func (r *Resolver) Lookup(address string) ([]net.IP, error)
 ```
@@ -209,7 +226,16 @@ Most callers should use one of the Fetch functions.
 
 
 
-### <a name="Resolver.Refresh">func</a> (\*Resolver) [Refresh](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=2780:2808#L97)
+### <a name="Resolver.Purge">func</a> (\*Resolver) [Purge](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=4209:4235#L131)
+``` go
+func (r *Resolver) Purge()
+```
+Purge will remove all entries. To comply with ResolverCache.
+
+
+
+
+### <a name="Resolver.Refresh">func</a> (\*Resolver) [Refresh](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=3614:3642#L114)
 ``` go
 func (r *Resolver) Refresh()
 ```
@@ -218,12 +244,78 @@ Refresh will iterate over cache items, and performing a live lookup one every Re
 
 
 
-### <a name="Resolver.RefreshTimeout">func</a> (\*Resolver) [RefreshTimeout](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=2991:3047#L103)
+### <a name="Resolver.RefreshTimeout">func</a> (\*Resolver) [RefreshTimeout](https://github.com/cognusion/dnscache/tree/master/dnscache.go?s=3824:3880#L120)
 ``` go
 func (r *Resolver) RefreshTimeout(timeout time.Duration)
 ```
 RefreshTimeout will iterate over cache items, and performing a live lookup one every RefreshSleepTime,
 until completed or the stated timeout expires.
+
+
+
+
+## <a name="ResolverCache">type</a> [ResolverCache](https://github.com/cognusion/dnscache/tree/master/cache.go?s=168:1467#L10)
+``` go
+type ResolverCache interface {
+    // Fetch retrieves a collection from the cache,
+    // or performs a live lookup and adds it to the cache.
+    Fetch(string) ([]net.IP, error)
+    // Lookup performs a live lookup,
+    // and adds the results to the cache.
+    Lookup(address string) ([]net.IP, error)
+    // Purge removes all entries from the cache.
+    Purge()
+    // Refresh will crawl the cache and update their entries.
+    // A timeout of 0 must mean no timeout.
+    // Refresh should honor RefreshSleepTime for per-lookup
+    // intervals unless the cache mechanism exposes its own
+    // tunables.
+    // Refresh may honor RefreshShuffle if it is practical or desirable.
+    Refresh(timeout time.Duration)
+    // Close should be used to signal end of operations.
+    // The cache should be considered unusable after this.
+    // Close may return an error, but should not assume it is consumed.
+    Close() error
+    // Add will upsert a collection into the cache.
+    Add(address string, ips []net.IP)
+    // Remove will remove a collection from the cache, if it exists.
+    Remove(address string)
+    // Get will return a collection from the cache, also bool if
+    // a collection was retrieved.
+    Get(address string) ([]net.IP, bool)
+    // Len will return the number of items in the cache.
+    // Eventually-consistent or lazy caches may return estimates.
+    Len() int
+}
+```
+ResolverCache is an interface to define different caches for Resolver.
+All functions defined here must be goro-safe.
+
+
+
+
+
+
+
+
+
+
+## <a name="ResolverConfig">type</a> [ResolverConfig](https://github.com/cognusion/dnscache/tree/master/cache.go?s=1541:1676#L43)
+``` go
+type ResolverConfig struct {
+    Cache               ResolverCache
+    AutoRefreshInterval time.Duration
+    AutoRefreshTimeout  time.Duration
+}
+
+```
+ResolverConfig is a common configuration structure for the Resolver.
+
+
+
+
+
+
 
 
 
