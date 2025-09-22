@@ -8,16 +8,23 @@ package dnscache
 
 import (
 	"context"
-	"iter"
 	"maps"
+	"math/rand/v2"
 	"net"
+	"slices"
 	"sync"
 	"time"
 )
 
-// RefreshSleepTime is the delay between Refresh (and auto-refresh)
-// lookups, to keep the resolver threads from piling up.
-var RefreshSleepTime = 1 * time.Second
+var (
+	// RefreshSleepTime is the delay between Refresh (and auto-refresh)
+	// lookups, to keep the resolver threads from piling up.
+	RefreshSleepTime = 1 * time.Second
+
+	// RefreshShuffle is used to control whether the addresses are shuffled during Refresh,
+	// to avoid long-tail misses on sufficiently large caches.
+	RefreshShuffle = true
+)
 
 // Resolver is a goro-safe caching DNS resolver.
 type Resolver struct {
@@ -96,8 +103,22 @@ func (r *Resolver) Refresh() {
 func (r *Resolver) RefreshTimeout(timeout time.Duration) {
 
 	r.lock.RLock()
-	addresses := maps.Keys(r.cache)
+	addressesIter := maps.Keys(r.cache)
 	r.lock.RUnlock()
+
+	// Create the iterator funcs we'll use. This also
+	addresses := slices.Sorted(addressesIter)
+
+	if len(addresses) == 0 {
+		// empty cache
+		return
+	}
+
+	if RefreshShuffle {
+		rand.Shuffle(len(addresses), func(i, j int) {
+			addresses[i], addresses[j] = addresses[j], addresses[i]
+		})
+	}
 
 	var (
 		ctx    context.Context
@@ -113,35 +134,14 @@ func (r *Resolver) RefreshTimeout(timeout time.Duration) {
 	}
 	defer cancel() // because yes
 
-	var (
-		address string
-		ok      bool
-	)
+	// first lookup is out of loop, so we don't wait
+	r.Lookup(addresses[0])
 
-	// Create the iterator funcs we'll use
-	next, stop := iter.Pull(addresses)
-	defer stop() // close the iterator eventually
-
-	// do the first lookup out-of-loop
-	address, ok = next()
-	if ok {
-		r.Lookup(address)
-	} else {
-		// nothing to do here
-		return
-	}
-
-	for {
+	// offset i to account for the previous lookup
+	for i := 1; i < len(addresses); i++ {
 		select {
 		case <-time.After(RefreshSleepTime):
-			// lookup the next address
-			address, ok = next()
-			if ok {
-				r.Lookup(address)
-			} else {
-				// nothing to do here
-				return
-			}
+			r.Lookup(addresses[i])
 		case <-r.done:
 			// actively cancelled
 			return
@@ -153,6 +153,7 @@ func (r *Resolver) RefreshTimeout(timeout time.Duration) {
 }
 
 // Lookup returns a collection of IPs from a live lookup, and updates the cache.
+// Most callers should use one of the Fetch functions.
 func (r *Resolver) Lookup(address string) ([]net.IP, error) {
 	ips, err := net.LookupIP(address)
 	if err != nil {

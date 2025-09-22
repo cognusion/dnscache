@@ -171,6 +171,41 @@ func TestItReloadsTheIpsAtAGivenInterval(t *testing.T) {
 	})
 }
 
+func TestAGTimeout(t *testing.T) {
+	defer leaktest.Check(t)()
+
+	Convey("When a DNSCache is created with an autorefresh interval, and an entry is corrupted, it properly refreshes.", t, FailureContinues, func() {
+		RefreshSleepTime = 4 * time.Second                                  // Set this to an unreasonably large number
+		RefreshShuffle = false                                              // Turn off else unpredictable.
+		r := NewWithRefreshTimeout(20*time.Millisecond, 1*time.Millisecond) // Set the timeout unreasonably small
+		defer r.Close()                                                     // if we're using autorefresh, Close prevents a goroleak.
+
+		r.lock.Lock()
+		r.cache["dns.google.com"] = nil
+		r.cache["www.google.com"] = nil
+		r.cache["images.google.com"] = nil
+		r.lock.Unlock()
+		time.Sleep(100 * time.Millisecond) // 3-5 refresh runs
+		r.lock.RLock()
+		defer r.lock.RUnlock()
+		So(ipsTov4(r.cache["dns.google.com"]...), ShouldResemble, googs) // first always gets a lookup
+		So(r.cache["www.google.com"], ShouldBeZeroValue)                 // will always miss the timeout
+		So(r.cache["images.google.com"], ShouldBeZeroValue)              // will always miss the timeout
+	})
+}
+
+func TestEmptyCacheRefresh(t *testing.T) {
+	defer leaktest.Check(t)()
+
+	Convey("", t, FailureContinues, func() {
+		r := New(0) // no autorefresh
+		start := time.Now()
+		r.Refresh()
+		after := time.Now()
+		So(after, ShouldHappenWithin, 10*time.Millisecond, start)
+	})
+}
+
 func stringsToIPs(strs ...string) []net.IP {
 	ips := make([]net.IP, len(strs))
 	for i, s := range strs {
