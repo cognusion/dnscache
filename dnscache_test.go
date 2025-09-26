@@ -56,6 +56,28 @@ func ExampleResolver_FetchOneString() {
 	fmt.Printf("%s\n", ipString)
 }
 
+// If you want to specify your cache style, then NewFromConfig is for you.
+func ExampleNewFromConfig() {
+	theCache, err := cache.NewLRU(
+		cache.NewConfigOption(cache.ConfigSize, 100),                       // Keep up to 100 items in the cache
+		cache.NewConfigOption(cache.ConfigRefreshType, cache.RefreshBatch), // Batch refreshes
+		cache.NewConfigOption(cache.ConfigRefreshBatchSize, 10),            // Refresh in batches of 10
+	)
+	if err != nil {
+		// don't actually do this.
+		panic(err)
+	}
+
+	//refresh items every 5 minutes
+	resolver := NewFromConfig(&ResolverConfig{
+		Cache:               theCache,
+		AutoRefreshInterval: 5 * time.Minute,
+	})
+	//get an array of net.IP
+	ips, _ := resolver.Fetch("dns.google.com")
+	fmt.Printf("%+v\n", ips)
+}
+
 // If you are using an `http.Transport`, you can use this cache by specifying a `Dial` function.
 func Example() {
 	// Create a resolver somewhere

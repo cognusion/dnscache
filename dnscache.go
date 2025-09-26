@@ -64,7 +64,7 @@ func NewWithRefreshTimeout(refreshRate, refreshTimeout time.Duration) *Resolver 
 
 // NewFromConfig returns a properly instantiated resolver, using the provided Cache
 // and the provided AutoRefresh* values.
-// NOTE: If using an LRU-style cache, setting the AutoRefreshInterval has large as
+// NOTE: If using an LRU-style cache, setting the AutoRefreshInterval as large as
 // feasible is advised, to keep the cache calculus correct.
 func NewFromConfig(config *ResolverConfig) *Resolver {
 	if config.Cache == nil {
