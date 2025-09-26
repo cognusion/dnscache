@@ -1,9 +1,7 @@
 package cache
 
 import (
-	"context"
 	"fmt"
-	"math/rand/v2"
 	"net"
 	"time"
 
@@ -19,10 +17,6 @@ const (
 	// ConfigItemTTL is a time.Duration.
 	// Values will control the life of unaccessed items in the cache.
 	ConfigItemTTL = ConfigKey("ItemTTL")
-	// ConfigAllowRefresh is a bool.
-	// True allows the cache to perform Refresh operations.
-	// False requires the cache to silently decline Refresh operations.
-	ConfigAllowRefresh = ConfigKey("AllowRefresh")
 )
 
 // hashiLRU is an abstraction to let us reuse LRU, but support multiple LRU types via
@@ -55,10 +49,12 @@ func (e *expirableWrapper) Remove(key string) {
 type LRU struct {
 	cache hashiLRU
 
-	allowRefresh     bool
 	resolver         ResolverFunc
 	refreshShuffle   bool
 	refreshSleepTime time.Duration
+	refreshType      RefreshType
+	refresh          RefreshFunc
+	refreshBatchSize int
 }
 
 // NewLRU instantiates an LRU cache.
@@ -101,7 +97,9 @@ func NewLRU(options ...ConfigOption) (*LRU, error) {
 		refreshShuffle:   true,
 		refreshSleepTime: 1 * time.Second,
 		resolver:         DefaultResolver,
-		allowRefresh:     true,
+		refresh:          LinearRefresh,
+		refreshType:      RefreshLinear,
+		refreshBatchSize: 15,
 	}
 
 	// Apply options
@@ -137,9 +135,24 @@ func (r *LRU) config(opt ConfigOption) error {
 		} else {
 			return opt.Key.Error()
 		}
-	case ConfigAllowRefresh:
-		if v, ok := opt.Value.(bool); ok {
-			r.allowRefresh = v
+	case ConfigRefreshType:
+		if v, ok := opt.Value.(RefreshType); ok {
+			r.refreshType = v
+			switch v {
+			case RefreshOff:
+				r.refresh = NoRefresh
+			case RefreshLinear:
+				r.refresh = LinearRefresh
+			case RefreshBatch:
+				r.refresh = BatchRefresh
+
+			}
+		} else {
+			return opt.Key.Error()
+		}
+	case ConfigRefreshBatchSize:
+		if v, ok := opt.Value.(int); ok {
+			r.refreshBatchSize = v
 		} else {
 			return opt.Key.Error()
 		}
@@ -189,67 +202,26 @@ func (r *LRU) Purge() {
 
 // Refresh will crawl the keys and update the cache with new values.
 func (r *LRU) Refresh(timeout time.Duration) {
-	if !r.allowRefresh {
-		// nope
-		return
-	}
+	var err error
 
-	// Get the keys
-	addresses := r.cache.Keys()
-
-	if len(addresses) == 0 {
-		// empty cache
-		return
-	}
-
-	if r.refreshShuffle {
-		rand.Shuffle(len(addresses), func(i, j int) {
-			addresses[i], addresses[j] = addresses[j], addresses[i]
-		})
-	}
-
-	var (
-		ctx    context.Context
-		cancel context.CancelFunc
-	)
-
-	if timeout == 0 {
-		// No deadline
-		ctx, cancel = context.WithCancel(context.Background())
+	if r.refreshType != RefreshBatch {
+		_, err = r.refresh(r, r.Lookup,
+			NewConfigOption(ConfigRefreshShuffle, r.refreshShuffle),
+			NewConfigOption(ConfigRefreshSleepTime, r.refreshSleepTime),
+			NewConfigOption(ConfigRefreshTimeout, timeout),
+		)
 	} else {
-		// Deadline
-		ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(timeout))
+		// batch
+		_, err = r.refresh(r, r.Lookup,
+			NewConfigOption(ConfigRefreshShuffle, r.refreshShuffle),
+			NewConfigOption(ConfigRefreshSleepTime, r.refreshSleepTime),
+			NewConfigOption(ConfigRefreshTimeout, timeout),
+			NewConfigOption(ConfigRefreshBatchSize, r.refreshBatchSize),
+		)
 	}
-	defer cancel() // because yes
 
-	// first lookup is out of loop, so we don't wait
-	r.Lookup(addresses[0])
-
-	// offset i to account for the previous lookup
-	for i := 1; i < len(addresses); i++ {
-		select {
-		case <-time.After(r.refreshSleepTime):
-			// this loop is here because it is highly possible that one or more of the
-			// previously-existing addresses no longer is in the cache, due to
-			// pressure or TTL evictions. So we peek into the cache to see if an
-			// address still exists, until one finally does, then we break out and
-			// outer-loop again.
-		STALE:
-			for {
-				if i >= len(addresses) {
-					// that's all folks
-					return
-				}
-				if r.cache.Contains(addresses[i]) {
-					r.Lookup(addresses[i])
-					break STALE
-				}
-				i++
-			}
-		case <-ctx.Done():
-			// took too long, deadline exceeded.
-			return
-		}
+	if err != nil {
+		panic(fmt.Errorf("error during RefreshFunc: %w", err))
 	}
 }
 
@@ -277,4 +249,14 @@ func (r *LRU) Get(key string) ([]net.IP, bool) {
 // Len will return the number of items in the cache.
 func (r *LRU) Len() int {
 	return r.cache.Len()
+}
+
+// Contains returns true if a value is in the cache.
+func (r *LRU) Contains(address string) bool {
+	return r.cache.Contains(address)
+}
+
+// Keys returns a sorted slice of the cache keys
+func (r *LRU) Keys() []string {
+	return r.cache.Keys()
 }

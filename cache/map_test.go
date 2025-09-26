@@ -87,6 +87,8 @@ func Test_SimpleConfigOptions(t *testing.T) {
 			NewConfigOption(ConfigRefreshSleepTime, 4*time.Second),
 			NewConfigOption(ConfigRefreshShuffle, false),
 			NewConfigOption(ConfigResolver, DefaultResolver),
+			NewConfigOption(ConfigRefreshType, RefreshBatch),
+			NewConfigOption(ConfigRefreshBatchSize, 30),
 		)
 		So(err, ShouldBeNil)
 		So(c, ShouldNotBeNil)
@@ -100,6 +102,8 @@ func Test_SimpleConfigOptions(t *testing.T) {
 			So(c.config(NewConfigOption(ConfigRefreshShuffle, 16)), ShouldBeError)
 			So(c.config(NewConfigOption(ConfigRefreshSleepTime, []string{})), ShouldBeError)
 			So(c.config(NewConfigOption(ConfigResolver, 42)), ShouldBeError)
+			So(c.config(NewConfigOption(ConfigRefreshType, 7)), ShouldBeError)
+			So(c.config(NewConfigOption(ConfigRefreshBatchSize, "thirty")), ShouldBeError)
 		})
 	})
 }

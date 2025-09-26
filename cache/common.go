@@ -17,6 +17,20 @@ var (
 	DefaultResolver ResolverFunc = net.LookupIP
 )
 
+// RefreshType is a string type for static consistency
+type RefreshType string
+
+// RefreshableCache is a minimal interface that caches must implement to be Refreshable.
+type RefreshableCache interface {
+	Keys() []string
+	Contains(address string) bool
+}
+
+// RefreshFunc is a definition for a Refreshable Refresh. How refreshing!
+// Do you feel refreshed? How many more times will I say "refresh"?
+// Refresh.
+type RefreshFunc func(RefreshableCache, ResolverFunc, ...ConfigOption) (bool, error)
+
 // ResolverFunc is a type to allow abtracting of the lowest resolver logic.
 type ResolverFunc func(address string) ([]net.IP, error)
 

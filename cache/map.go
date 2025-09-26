@@ -1,9 +1,8 @@
 package cache
 
 import (
-	"context"
+	"fmt"
 	"maps"
-	"math/rand/v2"
 	"net"
 	"slices"
 	"sync"
@@ -31,6 +30,9 @@ type Simple struct {
 	resolver         ResolverFunc
 	refreshShuffle   bool
 	refreshSleepTime time.Duration
+	refreshType      RefreshType
+	refresh          RefreshFunc
+	refreshBatchSize int
 }
 
 // NewSimple instantiates a Simple cache.
@@ -44,6 +46,9 @@ func NewSimple(options ...ConfigOption) (*Simple, error) {
 		refreshShuffle:   true,
 		refreshSleepTime: 1 * time.Second,
 		resolver:         DefaultResolver,
+		refresh:          LinearRefresh,
+		refreshType:      RefreshLinear,
+		refreshBatchSize: 15,
 	}
 
 	// Apply options
@@ -76,6 +81,27 @@ func (r *Simple) config(opt ConfigOption) error {
 	case ConfigRefreshSleepTime:
 		if v, ok := opt.Value.(time.Duration); ok {
 			r.refreshSleepTime = v
+		} else {
+			return opt.Key.Error()
+		}
+	case ConfigRefreshType:
+		if v, ok := opt.Value.(RefreshType); ok {
+			r.refreshType = v
+			switch v {
+			case RefreshOff:
+				r.refresh = NoRefresh
+			case RefreshLinear:
+				r.refresh = LinearRefresh
+			case RefreshBatch:
+				r.refresh = BatchRefresh
+
+			}
+		} else {
+			return opt.Key.Error()
+		}
+	case ConfigRefreshBatchSize:
+		if v, ok := opt.Value.(int); ok {
+			r.refreshBatchSize = v
 		} else {
 			return opt.Key.Error()
 		}
@@ -124,53 +150,26 @@ func (r *Simple) Purge() {
 // RefreshSleepTime is checked for per-lookup intervals.
 // RefreshShuffle is checked.
 func (r *Simple) Refresh(timeout time.Duration) {
-	r.lock.RLock()
-	addressesIter := maps.Keys(r.cache)
-	r.lock.RUnlock()
+	var err error
 
-	// Create the iterator funcs we'll use. This also
-	addresses := slices.Sorted(addressesIter)
-
-	if len(addresses) == 0 {
-		// empty cache
-		return
-	}
-
-	if r.refreshShuffle {
-		rand.Shuffle(len(addresses), func(i, j int) {
-			addresses[i], addresses[j] = addresses[j], addresses[i]
-		})
-	}
-
-	var (
-		ctx    context.Context
-		cancel context.CancelFunc
-	)
-
-	if timeout == 0 {
-		// No deadline
-		ctx, cancel = context.WithCancel(context.Background())
+	if r.refreshType != RefreshBatch {
+		_, err = r.refresh(r, r.Lookup,
+			NewConfigOption(ConfigRefreshShuffle, r.refreshShuffle),
+			NewConfigOption(ConfigRefreshSleepTime, r.refreshSleepTime),
+			NewConfigOption(ConfigRefreshTimeout, timeout),
+		)
 	} else {
-		// Deadline
-		ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(timeout))
+		// batch
+		_, err = r.refresh(r, r.Lookup,
+			NewConfigOption(ConfigRefreshShuffle, r.refreshShuffle),
+			NewConfigOption(ConfigRefreshSleepTime, r.refreshSleepTime),
+			NewConfigOption(ConfigRefreshTimeout, timeout),
+			NewConfigOption(ConfigRefreshBatchSize, r.refreshBatchSize),
+		)
 	}
-	defer cancel() // because yes
 
-	// first lookup is out of loop, so we don't wait
-	r.Lookup(addresses[0])
-
-	// offset i to account for the previous lookup
-	for i := 1; i < len(addresses); i++ {
-		select {
-		case <-time.After(r.refreshSleepTime):
-			r.Lookup(addresses[i])
-		case <-r.done:
-			// actively cancelled
-			return
-		case <-ctx.Done():
-			// took too long, deadline exceeded.
-			return
-		}
+	if err != nil {
+		panic(fmt.Errorf("error during RefreshFunc: %w", err))
 	}
 }
 
@@ -209,4 +208,21 @@ func (r *Simple) Len() int {
 	r.lock.RLock()
 	defer r.lock.RUnlock()
 	return len(r.cache)
+}
+
+// Contains returns true if a value is in the cache.
+func (r *Simple) Contains(address string) bool {
+	r.lock.RLock()
+	_, ok := r.cache[address]
+	r.lock.RUnlock()
+
+	return ok
+}
+
+// Keys returns a sorted slice of the cache keys
+func (r *Simple) Keys() []string {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+
+	return slices.Sorted(maps.Keys(r.cache))
 }
