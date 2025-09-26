@@ -186,6 +186,18 @@ func TestFetchLoadsTheIpAndCachesIt(t *testing.T) {
 	})
 }
 
+func TestNewFromCacheNilCache(t *testing.T) {
+	defer leaktest.Check(t)()
+
+	Convey("When a DNSCache is created with a config, but the cache is nil, it works as expected up.", t, func() {
+		r := NewFromConfig(&ResolverConfig{})
+		So(r, ShouldNotBeNil)
+
+		ips, _ := r.Fetch("dns.google.com")
+		So(ipsTov4(ips...), ShouldResemble, googs)
+	})
+}
+
 func TestItReloadsTheIpsAtAGivenInterval(t *testing.T) {
 	defer leaktest.Check(t)()
 

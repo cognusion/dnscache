@@ -67,6 +67,12 @@ func NewWithRefreshTimeout(refreshRate, refreshTimeout time.Duration) *Resolver 
 // NOTE: If using an LRU-style cache, setting the AutoRefreshInterval has large as
 // feasible is advised, to keep the cache calculus correct.
 func NewFromConfig(config *ResolverConfig) *Resolver {
+	if config.Cache == nil {
+		// cache wasn't specified. Why is this constructor called?!
+		c, _ := cache.NewSimple() // defaults, no error trap needed
+		config.Cache = c
+	}
+
 	resolver := &Resolver{
 		cache:  config.Cache,
 		config: config,
