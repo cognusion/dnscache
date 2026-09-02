@@ -81,6 +81,7 @@ func LinearRefresh(cache RefreshableCache, resolver ResolverFunc, options ...Con
 	}
 
 	if refreshShuffle {
+		//#nosec G404 -- We just want to shuffle these, not for security.
 		rand.Shuffle(len(addresses), func(i, j int) {
 			addresses[i], addresses[j] = addresses[j], addresses[i]
 		})
@@ -183,6 +184,7 @@ func BatchRefresh(cache RefreshableCache, resolver ResolverFunc, options ...Conf
 	}
 
 	if refreshShuffle {
+		//#nosec G404 -- We just want to shuffle these, not for security.
 		rand.Shuffle(len(addresses), func(i, j int) {
 			addresses[i], addresses[j] = addresses[j], addresses[i]
 		})
